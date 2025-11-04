@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Single-file Voxel Game — Textures, better hotbar, placing disabled</title>
+  <title>Voxel Game — Creative Mode (128x128)</title>
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <style>
     html,body { height:100%; margin:0; background:#111; overflow:hidden; font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial; -webkit-user-select:none; user-select:none; touch-action:none; }
@@ -30,20 +30,25 @@
     .action-row { display:flex; gap:10px; margin-top:6px; pointer-events:auto; }
     .btn { width:56px; height:56px; background:rgba(255,255,255,0.06); border-radius:12px; border:1px solid rgba(255,255,255,0.12); color:#fff; font-size:20px; display:flex; align-items:center; justify-content:center; user-select:none; touch-action:manipulation; }
 
-    /* Hotbar with textured icons */
+    /* Hotbar with textured icons (Updated for more slots) */
     #hotbar {
       position:fixed; left:50%; transform:translateX(-50%); bottom:84px; z-index:55;
-      display:flex; gap:8px; pointer-events:none;
+      display:flex; gap:6px; /* Reduced gap slightly to fit more */
+      pointer-events:none;
+      max-width: 95%; /* Allow it to take up more space */
+      overflow-x: auto; /* Allow scrolling if it gets too wide */
     }
     .hotbar-slot {
       pointer-events:auto;
-      width:64px; height:64px; background:rgba(0,0,0,0.6); border-radius:8px;
+      width:60px; height:60px; /* Slight size reduction to fit more blocks */
+      min-width: 60px; /* Ensure they don't shrink */
+      background:rgba(0,0,0,0.6); border-radius:8px;
       border:2px solid rgba(255,255,255,0.08); display:flex; flex-direction:column; align-items:center; justify-content:center;
       color:#fff; font-size:12px; cursor:pointer;
       box-sizing:border-box;
     }
     .hotbar-slot .icon {
-      width:36px; height:36px; border-radius:6px; margin-bottom:6px; background-size:cover; background-position:center;
+      width:32px; height:32px; border-radius:6px; margin-bottom:4px; background-size:cover; background-position:center;
       box-shadow: inset 0 -6px 12px rgba(0,0,0,0.25);
     }
     .hotbar-slot .count { font-size:11px; opacity:0.9; }
@@ -53,14 +58,20 @@
     #progress > div { height:100%; width:0%; background:linear-gradient(90deg,#ffd36b,#ff8a3d); border-radius:8px }
 
     @media (pointer: fine) { #controls-ui { display:none; } }
-    @media (max-width:420px) { #look-area { width:160px; height:120px } #joy-left { width:110px; height:110px } .hotbar-slot { width:52px; height:52px } }
+    @media (max-width:420px) { 
+        #look-area { width:160px; height:120px } 
+        #joy-left { width:110px; height:110px } 
+        .hotbar-slot { width:48px; height:48px; min-width: 48px; } 
+        .hotbar-slot .icon { width:28px; height:28px; }
+    }
 
     canvas { display:block; }
   </style>
+  <div id="crosshair" style="position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); font-size:32px; color:rgba(255,255,255,0.85); z-index:100; pointer-events:none;">+</div>
 </head>
 <body>
   <div id="hud">Loading...</div>
-  <div id="hint">Click to lock pointer (desktop). WASD to move, Space to jump, Q break, placing is disabled by default. Mobile: left joystick move, right drag look.</div>
+  <div id="hint">Click to lock pointer (desktop). WASD move, Space jump, Q break, E place. Mobile: left joystick move, right drag look.</div>
 
   <div id="controls-ui" aria-hidden="true">
     <div id="joy-left" aria-hidden="true"><div class="joy-bg"></div><div class="joy-knob" id="joy-knob">•</div></div>
@@ -79,39 +90,40 @@
   <div id="progress"><div></div></div>
 
   <script type="module">
-    import * as THREE from 'https://unpkg.com/three@0.154.0/build/three.module.js';
+    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.module.js';
 
-    // ======= Features changed in this update =======
-    // - Added procedural canvas textures for each block type (no external images)
-    // - Hotbar redesigned to show textured icons + counts + nicer selected styling
-    // - Placing blocks is now disabled by default (allowPlacing = false) per your request
-    // - Collision remains enforced: player cannot enter blocks (noclip disabled)
-    // - Breaking still works (adds to inventory), but placing is ignored while disabled
-    // =================================================
-
-    // ---------- Config ----------
-    const WORLD_W = 64, WORLD_H = 36, WORLD_D = 64;
+    // ======= Config Updates: Creative Mode & World Size =======
+    const CREATIVE_MODE = true;
+    const WORLD_W = 128, WORLD_H = 36, WORLD_D = 128; // Doubled size for bigger land
     const PLAYER_EYE = 1.6;
     const JOY_DEADZONE = 0.18, MAX_JOY = 48;
     const BLOCK_AIR = 0;
 
-    // Block metadata
+    // Player Bounding Box Constants
+    const PLAYER_W = 0.35; // Half-width/depth of the player (0.7 wide/deep total)
+    const PLAYER_H = 1.8;  // Total height of the player
+    
+    // Block metadata (Expanded for Creative Mode)
     const BLOCKS = {
       1: { name: 'Dirt', color: 0x6c5b38, hardness: 0.6 },
       2: { name: 'Stone', color: 0x8b8b8b, hardness: 1.4 },
       3: { name: 'Grass', color: 0x3ea033, hardness: 0.7 },
       4: { name: 'Wood', color: 0x8b5a2b, hardness: 1.0 },
-      5: { name: 'Leaves', color: 0x4ca04c, hardness: 0.3 },
-      6: { name: 'Sand', color: 0xe4d99b, hardness: 0.5 }
+      5: { name: 'Leaves', color: 0x4ca04c, hardness: 0.3, transparent: true },
+      6: { name: 'Sand', color: 0xe4d99b, hardness: 0.5 },
+      7: { name: 'Brick', color: 0xa84f3e, hardness: 1.5 },
+      8: { name: 'Glass', color: 0xeeeeee, hardness: 0.1, transparent: true },
+      9: { name: 'Gold', color: 0xffd700, hardness: 3.0 },
+      10: { name: 'Lapis', color: 0x3c64a4, hardness: 2.5 },
+      11: { name: 'Obsidian', color: 0x221a30, hardness: 5.0 },
+      12: { name: 'Water', color: 0x47789a, hardness: 0.0, transparent: true, liquid: true },
     };
 
-    // Inventory: starting counts
-    const inventory = {1:30,2:12,3:20,4:8,5:0,6:14};
+    // Inventory is ignored in Creative Mode
+    const inventory = {}; 
     let selectedBlockId = 1;
 
-    // Control: disable placing by default
-    let allowPlacing = false; // <-- changed: disabled placing
-    // (If you want to re-enable placing later, set allowPlacing = true)
+    let allowPlacing = true; 
 
     // ---------- Utils ----------
     function idx(x,y,z,w,d){ return x + w*(z + d*y); }
@@ -119,7 +131,6 @@
     function inBounds(x,y,z){ return x>=0 && y>=0 && z>=0 && x<WORLD_W && y<WORLD_H && z<WORLD_D; }
 
     // ---------- Texture generation (procedural canvas textures) ----------
-    // Create a small canvas per block type with a simple shaded tile look and optional pattern for ores/leaves
     const textureCanvases = {}; // id -> canvas
     function makeBlockCanvas(colorHex, opts = {}) {
       const size = 64;
@@ -144,7 +155,7 @@
         img.data[i+2] = clamp(img.data[i+2]+v,0,255);
       }
       ctx.putImageData(img,0,0);
-      // optional pattern (like wood rings or leaves speckle)
+      // optional pattern
       if(opts.type === 'wood'){
         ctx.strokeStyle = 'rgba(0,0,0,0.06)';
         ctx.lineWidth = 2;
@@ -161,6 +172,18 @@
         for(let i=0;i<120;i++){
           ctx.fillRect(Math.random()*size, Math.random()*size, 1, 1);
         }
+      } else if(opts.type === 'brick'){
+        ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+        ctx.lineWidth = 1;
+        for(let i=0; i<size; i+=8) ctx.strokeRect(0, i, size, 4);
+        for(let i=0; i<size; i+=16) ctx.strokeRect(i, 0, 8, size);
+        for(let i=8; i<size; i+=16) ctx.strokeRect(i, 4, 8, size);
+      } else if(opts.type === 'glass'){
+         ctx.fillStyle = 'rgba(255,255,255,0.1)';
+         ctx.fillRect(0,0,size,size);
+         ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+         ctx.lineWidth = 2;
+         ctx.strokeRect(size/4, size/4, size/2, size/2);
       }
       return c;
     }
@@ -169,10 +192,19 @@
     function getMaterialForBlock(id){
       if(materialCache[id]) return materialCache[id];
       const meta = BLOCKS[id];
-      const canvas = textureCanvases[id] || (textureCanvases[id] = makeBlockCanvas(meta.color, { type: meta.name.toLowerCase().includes('wood') ? 'wood' : meta.name.toLowerCase().includes('leaves') ? 'leaves' : meta.name.toLowerCase().includes('sand') ? 'sand' : '' }));
+      const canvas = textureCanvases[id] || (textureCanvases[id] = makeBlockCanvas(meta.color, { type: meta.name.toLowerCase() }));
       const tex = new THREE.CanvasTexture(canvas);
       tex.needsUpdate = true;
-      const mat = new THREE.MeshLambertMaterial({ map: tex, transparent: false });
+      
+      const isTransparent = meta.transparent || false;
+      
+      const mat = new THREE.MeshLambertMaterial({ 
+          map: tex, 
+          transparent: isTransparent, 
+          opacity: isTransparent ? (meta.liquid ? 0.6 : 0.8) : 1.0, // Water is slightly more transparent
+          side: THREE.DoubleSide // Important for transparent blocks
+      });
+
       materialCache[id] = { material: mat, textureCanvas: canvas };
       return materialCache[id];
     }
@@ -183,10 +215,10 @@
         this.w = w; this.h = h; this.d = d;
         this.size = w*h*d;
         this.blocks = new Uint8Array(this.size).fill(0);
-        this.instanceIdToCoord = []; // not used for per-type grouping, but kept for compatibility
-        this.group = new THREE.Group(); // container for instanced meshes
-        this._meshes = {}; // id -> instancedMesh
-        this._counts = {}; // id -> count
+        this.instanceIdToCoord = [];
+        this.group = new THREE.Group();
+        this._meshes = {};
+        this._counts = {};
         if(scene) scene.add(this.group);
         this.generateTerrainAndTrees();
         this.updateMeshes();
@@ -207,7 +239,7 @@
               else this.set(x,y,z, 3);
             }
             // small tree
-            if(h > 3 && Math.random() < 0.03 && distEdge >= 6){
+            if(h > 3 && Math.random() < 0.04 && distEdge >= 6){ // Slightly more trees for bigger map
               const trunkH = 3 + Math.floor(Math.random()*2);
               for(let ty = h; ty < Math.min(h+trunkH, this.h-1); ++ty) this.set(x,ty,z, 4);
               const ly = Math.min(h+trunkH, this.h-2);
@@ -215,6 +247,14 @@
                 const lx = x+ix, lz = z+iz, lypos = ly+iy;
                 if(this.inBounds(lx,lypos,lz) && Math.abs(ix)+Math.abs(iz) <= 4 && this.get(lx,lypos,lz) === BLOCK_AIR) this.set(lx,lypos,lz, 5);
               }
+            }
+            
+            // Add some water near low points
+            if (h < 6 && distEdge > 8 && Math.random() < 0.005) {
+                // Creates a small water pool at height 5
+                for(let poolY = 1; poolY < 6; poolY++) {
+                    if(this.get(x, poolY, z) === BLOCK_AIR) this.set(x, poolY, z, 12); 
+                }
             }
           }
         }
@@ -228,7 +268,8 @@
         // remove old
         while(this.group.children.length) {
           const c = this.group.children.pop();
-          if(c.dispose) c.dispose();
+          if(c.geometry) c.geometry.dispose();
+          if(c.material) c.material.dispose();
         }
         this._meshes = {};
         this._counts = {};
@@ -243,11 +284,12 @@
         }
 
         const tmp = new THREE.Matrix4();
+        const boxGeom = new THREE.BoxGeometry(1,1,1);
         Object.keys(lists).forEach(k=>{
           const id = parseInt(k);
           const arr = lists[k];
           const matInfo = getMaterialForBlock(id);
-          const inst = new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1), matInfo.material, arr.length);
+          const inst = new THREE.InstancedMesh(boxGeom, matInfo.material, arr.length);
           inst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
           for(let i=0;i<arr.length;i++){
             tmp.makeTranslation(arr[i].x + 0.5, arr[i].y + 0.5, arr[i].z + 0.5);
@@ -259,6 +301,7 @@
           this._meshes[id] = inst;
           this._counts[id] = arr.length;
         });
+        boxGeom.dispose();
       }
     }
 
@@ -273,17 +316,22 @@
 
     function rebuildHotbarUI(){
       hotbarEl.innerHTML = '';
-      const keys = Object.keys(BLOCKS).map(x=>parseInt(x));
+      // In Creative Mode, display all defined blocks
+      const keys = Object.keys(BLOCKS).map(x=>parseInt(x)).filter(id => id > 0);
+      
       for(const id of keys){
         const slot = document.createElement('div');
         slot.className = 'hotbar-slot' + (id === selectedBlockId ? ' selected' : '');
         slot.dataset.bid = id;
-        // get texture canvas if created
         const matInfo = getMaterialForBlock(id);
         const canvas = matInfo.textureCanvas;
         const dataURL = canvas.toDataURL();
+        
+        // Creative Mode: Count is always infinity symbol
+        const countDisplay = CREATIVE_MODE ? '∞' : (inventory[id] ?? 0); 
+
         slot.innerHTML = `<div class="icon" style="background-image:url('${dataURL}');"></div>
-                          <div class="count">${inventory[id] ?? 0}</div>`;
+                          <div class="count">${countDisplay}</div>`;
         slot.title = BLOCKS[id].name;
         slot.addEventListener('click', ()=>{
           selectedBlockId = id;
@@ -292,9 +340,7 @@
         slot.addEventListener('touchstart', (e)=>{ e.preventDefault(); selectedBlockId = id; rebuildHotbarUI(); }, {passive:false});
         hotbarEl.appendChild(slot);
       }
-      // show placing state visibly
-      const hint = document.getElementById('hint');
-      hint.innerText = allowPlacing ? 'Placing enabled — E to place. Press P to toggle.' : 'Placing DISABLED — cannot place blocks. Press P to toggle.';
+      document.getElementById('hint').innerText = 'WASD move, Space jump, Q break, E place. Select blocks with 1-' + keys.length + '. Mobile: left joystick move, right drag look.';
     }
 
     // ---------- Controls setup and mobile UI ----------
@@ -321,13 +367,10 @@
         if(e.code === 'Space') inputState.jump = true;
         if(e.code === 'KeyE') inputState.place = true;
         if(e.code === 'KeyQ') inputState.break = true;
-        if(e.code === 'KeyP'){ // allow toggling placing with P for convenience
-          allowPlacing = !allowPlacing;
-          rebuildHotbarUI();
-        }
+        
         if(e.key >= '1' && e.key <= '9'){
           const n = parseInt(e.key);
-          const keys = Object.keys(BLOCKS).map(x=>parseInt(x));
+          const keys = Object.keys(BLOCKS).map(x=>parseInt(x)).filter(id => id > 0);
           if(n-1 < keys.length){ selectedBlockId = keys[n-1]; rebuildHotbarUI(); }
         }
       });
@@ -352,7 +395,6 @@
       }
       function updateKnob(){ if(!joyKnob || !joyLeft) return; const w = joyLeft.clientWidth, h = joyLeft.clientHeight; joyKnob.style.left = (50 + joystick.dx / w * 100) + '%'; joyKnob.style.top  = (50 + joystick.dy / h * 100) + '%'; }
       window._mobileJoystick = joystick;
-
       // look area drag on mobile
       const lookArea = document.getElementById('look-area');
       let lookTouchId = null, lastLookX = 0, lastLookY = 0;
@@ -390,7 +432,7 @@
 
     // ---------- Player ----------
     const player = {
-      pos: new THREE.Vector3(Math.floor(WORLD_W/2)+0.5, WORLD_H + PLAYER_EYE - 2, Math.floor(WORLD_D/2)+0.5),
+      pos: new THREE.Vector3(Math.floor(WORLD_W/2)+0.5, 20 + PLAYER_EYE, Math.floor(WORLD_D/2)+0.5), 
       velocity: new THREE.Vector3(),
       yaw: 0, pitch: 0,
       speed: 4.0, jumpVel: 6.0, onGround: false
@@ -403,7 +445,6 @@
     function getBlockTarget(){
       camera.updateMatrixWorld();
       raycaster.setFromCamera({x:0,y:0}, camera);
-      // sample along ray similar to earlier approach
       const origin = raycaster.ray.origin.clone();
       const dir = raycaster.ray.direction.clone();
       const step = 0.12, maxDist = 8;
@@ -422,15 +463,39 @@
       return null;
     }
 
-    // ---------- Collision helper ----------
+    // ---------- Collision helper (FIXED for AABB) ----------
     function collidesAt(pos){
-      const x = Math.floor(pos.x), y = Math.floor(pos.y - 0.001), z = Math.floor(pos.z);
-      return world.get(x,y,z) !== BLOCK_AIR;
+      const points = [
+        // Bottom layer points
+        {dx: -PLAYER_W, dy: -PLAYER_H + 0.05, dz: -PLAYER_W},
+        {dx: -PLAYER_W, dy: -PLAYER_H + 0.05, dz:  PLAYER_W},
+        {dx:  PLAYER_W, dy: -PLAYER_H + 0.05, dz: -PLAYER_W},
+        {dx:  PLAYER_W, dy: -PLAYER_H + 0.05, dz:  PLAYER_W},
+        // Top layer points (near the top of the body)
+        {dx: -PLAYER_W, dy: -0.1, dz: -PLAYER_W},
+        {dx: -PLAYER_W, dy: -0.1, dz:  PLAYER_W},
+        {dx:  PLAYER_W, dy: -0.1, dz: -PLAYER_W},
+        {dx:  PLAYER_W, dy: -0.1, dz:  PLAYER_W},
+      ];
+
+      for (const {dx, dy, dz} of points) {
+        const checkX = Math.floor(pos.x + dx);
+        const checkY = Math.floor(pos.y + dy);
+        const checkZ = Math.floor(pos.z + dz);
+        if (world.get(checkX, checkY, checkZ) !== BLOCK_AIR) {
+          // Check for liquid blocks (Water: 12) - allow movement
+          if (world.get(checkX, checkY, checkZ) !== 12) {
+            return true; // Solid block collision detected
+          }
+        }
+      }
+      return false;
     }
+    
     function wouldOverlapPlayer(tx,ty,tz, ppos){
-      const half = 0.35;
-      const pmin = {x:ppos.x-half, y:ppos.y-PLAYER_EYE-0.1, z:ppos.z-half};
-      const pmax = {x:ppos.x+half, y:ppos.y-0.1+0.01, z:ppos.z+half};
+      const half = PLAYER_W;
+      const pmin = {x:ppos.x-half, y:ppos.y-PLAYER_H+0.1, z:ppos.z-half};
+      const pmax = {x:ppos.x+half, y:ppos.y+0.01, z:ppos.z+half};
       const bmin = {x:tx, y:ty, z:tz}, bmax = {x:tx+1, y:ty+1, z:tz+1};
       return (pmin.x < bmax.x && pmax.x > bmin.x) && (pmin.y < bmax.y && pmax.y > bmin.y) && (pmin.z < bmax.z && pmax.z > bmin.z);
     }
@@ -439,6 +504,7 @@
     let lastTime = performance.now();
     let placeTimer = 0, breakTimer = 0;
     const COOLDOWN_MS = 180;
+    
     function animate(now){
       const dt = Math.min((now - lastTime)/1000, 0.05);
       lastTime = now;
@@ -462,21 +528,55 @@
         const len = Math.hypot(mvx,mvz) || 1; mvx = (mvx / len) * speed; mvz = (mvz / len) * speed;
       }
       player.velocity.x = mvx; player.velocity.z = mvz;
-      player.velocity.y -= 12.0 * dt;
+      player.velocity.y -= 12.0 * dt; // Gravity
 
+      // Check for ground collision before jumping
       const foot = player.pos.clone(); foot.y -= 0.2;
       player.onGround = collidesAt(foot);
+      
+      // If player is on the ground and moving down, stop vertical movement
       if(player.onGround && player.velocity.y < 0) player.velocity.y = 0;
       if(player.onGround && inputState.jump){ player.velocity.y = player.jumpVel; player.onGround = false; }
 
-      // integrate
+
+      // --- Movement Integration ---
       let next = player.pos.clone();
+
+      // 1. Move X
       next.x += player.velocity.x * dt;
-      if(!collidesAt(new THREE.Vector3(next.x, player.pos.y, player.pos.z))) player.pos.x = next.x; else player.velocity.x = 0;
+      if (collidesAt(new THREE.Vector3(next.x, player.pos.y, player.pos.z))) {
+        player.velocity.x = 0;
+        if (player.pos.x < next.x) player.pos.x = Math.floor(next.x + PLAYER_W) - PLAYER_W - 0.001; // positive X
+        else player.pos.x = Math.ceil(next.x - PLAYER_W) + PLAYER_W + 0.001; // negative X
+      } else {
+        player.pos.x = next.x;
+      }
+
+      // 2. Move Y
       next.y += player.velocity.y * dt;
-      if(!collidesAt(new THREE.Vector3(player.pos.x, next.y, player.pos.z))) player.pos.y = next.y; else { if(player.velocity.y < 0) player.onGround = true; player.velocity.y = 0; }
+      if (collidesAt(new THREE.Vector3(player.pos.x, next.y, player.pos.z))) {
+        if (player.velocity.y < 0) { // Hitting ground
+          player.onGround = true;
+          player.pos.y = Math.floor(next.y - PLAYER_H) + PLAYER_H + 0.001; 
+        } else { // Hitting head
+          player.pos.y = Math.floor(next.y - 0.1) - 0.001; 
+        }
+        player.velocity.y = 0;
+      } else {
+        player.pos.y = next.y;
+      }
+
+      // 3. Move Z
       next.z += player.velocity.z * dt;
-      if(!collidesAt(new THREE.Vector3(player.pos.x, player.pos.y, next.z))) player.pos.z = next.z; else player.velocity.z = 0;
+      if (collidesAt(new THREE.Vector3(player.pos.x, player.pos.y, next.z))) {
+        player.velocity.z = 0;
+        if (player.pos.z < next.z) player.pos.z = Math.floor(next.z + PLAYER_W) - PLAYER_W - 0.001; // positive Z
+        else player.pos.z = Math.ceil(next.z - PLAYER_W) + PLAYER_W + 0.001; // negative Z
+      } else {
+        player.pos.z = next.z;
+      }
+      // --- End Movement Integration ---
+
 
       // camera follow
       const eye = player.pos.clone();
@@ -487,17 +587,16 @@
 
       // targeting & UI
       const tgt = getBlockTarget();
-      // show basic crosshair change when target exists
       const cross = document.getElementById('crosshair');
-      cross.style.color = tgt ? '#ffd36b' : 'rgba(255,255,255,0.85)';
+      if(cross) cross.style.color = tgt ? '#ffd36b' : 'rgba(255,255,255,0.85)';
 
-      // breaking (adds to inventory)
+      // breaking (Creative Mode: just remove block)
       if(inputState.break && breakTimer <= 0 && tgt){
         const bx = tgt.block.x, by = tgt.block.y, bz = tgt.block.z;
-        const bid = world.get(bx,by,bz);
-        if(bid !== BLOCK_AIR){
+        const bid = tgt.block.id;
+        if(bid && bid !== BLOCK_AIR){
           world.set(bx,by,bz, BLOCK_AIR);
-          inventory[bid] = (inventory[bid] || 0) + 1;
+          // inventory change removed for creative mode
           world.updateMeshes();
           rebuildHotbarUI();
           breakTimer = COOLDOWN_MS;
@@ -505,23 +604,19 @@
         inputState.break = false;
       }
 
-      // placing: now honor allowPlacing flag
+      // placing (Creative Mode: no inventory check/decrease)
       if(inputState.place && placeTimer <= 0 && tgt){
-        if(!allowPlacing){
-          // notify briefly
-          const prev = hud.innerHTML;
-          hud.innerHTML = 'Placing is disabled (press P to toggle).';
-          setTimeout(()=> hud.innerHTML = prev, 900);
-        } else {
-          const tx = tgt.place.x, ty = tgt.place.y, tz = tgt.place.z;
-          if(inBounds(tx,ty,tz) && world.get(tx,ty,tz) === BLOCK_AIR && !wouldOverlapPlayer(tx,ty,tz, player.pos)) {
-            if((inventory[selectedBlockId] || 0) > 0){
-              world.set(tx,ty,tz, selectedBlockId);
-              inventory[selectedBlockId] = Math.max(0, (inventory[selectedBlockId] || 0) - 1);
-              world.updateMeshes();
-              rebuildHotbarUI();
-              placeTimer = COOLDOWN_MS;
-            }
+        const tx = tgt.place.x, ty = tgt.place.y, tz = tgt.place.z;
+        // Check if the placing block is within bounds, is air, and doesn't overlap the player
+        if(inBounds(tx,ty,tz) && world.get(tx,ty,tz) === BLOCK_AIR && !wouldOverlapPlayer(tx,ty,tz, player.pos)) {
+          
+          // Creative Mode: always place if a block is selected
+          if(selectedBlockId > 0){ 
+            world.set(tx,ty,tz, selectedBlockId);
+            // inventory change removed for creative mode
+            world.updateMeshes();
+            rebuildHotbarUI();
+            placeTimer = COOLDOWN_MS;
           }
         }
         inputState.place = false;
@@ -532,22 +627,31 @@
       sun.position.set(50*Math.sin(nowt), 50*Math.cos(nowt), 20*Math.cos(nowt*0.7));
 
       // HUD
-      hud.innerHTML = `Pos: ${player.pos.x.toFixed(2)}, ${player.pos.y.toFixed(2)}, ${player.pos.z.toFixed(2)}<br>` +
-                      `Selected: ${BLOCKS[selectedBlockId].name} (${inventory[selectedBlockId]||0})<br>` +
-                      `Placing: ${allowPlacing ? 'ENABLED' : 'DISABLED'} (toggle: P)`;
+      const numBlocks = Object.keys(BLOCKS).length;
+      hud.innerHTML = `<span style="color:#ffd36b;">[CREATIVE MODE]</span><br>` +
+                      `World Size: ${WORLD_W}x${WORLD_D}<br>` +
+                      `Pos: ${player.pos.x.toFixed(2)}, ${player.pos.y.toFixed(2)}, ${player.pos.z.toFixed(2)}<br>` +
+                      `Selected: ${BLOCKS[selectedBlockId].name}<br>` +
+                      `Controls: WASD move, Space jump, Q break, E place, 1-${numBlocks} select`;
 
       renderer.render(scene, camera);
       requestAnimationFrame(animate);
     }
+    
+    // Handle window resize
+    function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+    window.addEventListener('resize', onWindowResize);
 
     // initialize
     rebuildHotbarUI();
     requestAnimationFrame(animate);
     camera.position.set(player.pos.x, player.pos.y, player.pos.z);
     camera.lookAt(player.pos.x + Math.sin(player.yaw), player.pos.y + Math.sin(player.pitch), player.pos.z + Math.cos(player.yaw));
-    document.getElementById('hud').innerText = "Loaded. Click to lock pointer (desktop). Mobile controls available.";
-
-    console.log('Textures + improved hotbar applied. Placing is disabled by default. Noclip remains disabled (collision enforced).');
+    document.getElementById('hud').innerText = "Loaded. Click to lock pointer (desktop). Mobile controls available. Q to break, E to place. 128x128 World.";
   </script>
 </body>
 </html>
